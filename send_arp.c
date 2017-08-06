@@ -3,7 +3,7 @@
 #include <pcap.h>
 #include <stdint.h>
 #include <sys/socket.h>
-#include "getMacAddr.h"
+#include "send_arp.h"
 
 
 /* Ethernet header */
@@ -30,7 +30,6 @@ struct __attribute__((packed)) arphdr {
 }; 
 
 void print_mac(u_char *mac_addr){
-	printf("print_mac function\n");
 	for(int i=0;i<ETHER_ADDR_LEN;i++){
 		printf("%02x",*(mac_addr+i));
 		if(i<5) printf(":");
@@ -48,7 +47,6 @@ void arp_broad(pcap_t *handle, u_char *mac_addr, struct in_addr *senderIP, struc
 	int flag;
 	struct in_addr recv_IP;
 	u_char* recv_MAC;
-
 	memcpy(ether.src,mac_addr,ETHER_ADDR_LEN);
 	memcpy(ether.dst,"\xff\xff\xff\xff\xff\xff",ETHER_ADDR_LEN);
 	ether.ether_type = htons(0x0806);
@@ -80,16 +78,16 @@ void arp_broad(pcap_t *handle, u_char *mac_addr, struct in_addr *senderIP, struc
 	printf("\t\tplen : %d\n",arp_h.plen);
 	printf("\t\toper : %x\n",ntohs(arp_h.oper));
 	printf("\t\tsender mac : "); print_mac(arp_h.sha);
-	printf("\t\tsender IP : 0x%X\n",ntohl(arp_h.spa));
+	printf("\t\tsender IP : 0x"); for(int i=0;i<4;i++) printf("%02x",arp_h.spa[i]); printf("\n");
 	printf("\t\ttarget MAC : "); print_mac(arp_h.tha);
-	printf("\t\ttarget IP : 0x%X\n",ntohl(arp_h.tpa));
+	printf("\t\ttarget IP : 0x"); for(int i=0;i<4;i++) printf("%02x",arp_h.tpa[i]); printf("\n");
 
 	packet = (u_char*)malloc(sizeof(ether)+sizeof(arp_h));
 	memcpy(packet,&ether,sizeof(ether));
 	memcpy(packet+sizeof(ether),&arp_h,sizeof(arp_h));
 	packet_len = sizeof(ether) + sizeof(arp_h);
-	printf("sizeof(ether) : %d , sizeof(arp_h) : %d\n",sizeof(ether),sizeof(arp_h));
-	printf("[+] packet to send\n");
+	
+	printf("\n[+] packet to send\n");
 	for(int i=0;i<sizeof(ether)+sizeof(arp_h);i++){
 		if(i != 0 && i%16 == 0)
 			printf("\n");
@@ -97,17 +95,17 @@ void arp_broad(pcap_t *handle, u_char *mac_addr, struct in_addr *senderIP, struc
 	}
 	printf("end\n");
 
-
 	while(1){
-		if(pcap_sendpacket(handle,packet,sizeof(ether)+sizeof(arp_h)) == 0)
+		if(pcap_sendpacket(handle,packet,packet_len) == 0)
 			break;
 	}
 
+	printf("\n[+] arp request completed!\n\n");
 	while(1){
 		flag = pcap_next_ex(handle,&header,&recv_packet);
 		if(flag == 0){
 			printf("[-] time out! sending packet...\n");
-			if(pcap_sendpacket(handle,packet,packet_len) == 0){
+			if(pcap_sendpacket(handle,packet,packet_len) !=0){
 				printf("[-] failed... restart the program!\n");
 				exit(1);
 			}
@@ -118,26 +116,44 @@ void arp_broad(pcap_t *handle, u_char *mac_addr, struct in_addr *senderIP, struc
 			printf("[-] fail to receive packet... restart the program!\n");
 			exit(1);
 		}
-		
+
+
+	for(int i=0;i<sizeof(ether)+sizeof(arp_h);i++){
+		if(i != 0 && i%16 == 0)
+			printf("\n");
+		printf("%02x ",*(recv_packet+i));
+	}
+	printf("end\n");
+		printf("\n[-] success to receive packet!\n");
 		recv_ether = (struct etherhdr*)recv_packet;
-		if(htons(recv_ether->ether_type) != 0x0806)
+		if(htons(recv_ether->ether_type) != 0x0806){
+			printf("[-] reply ether type is not arp!\n");
+			printf("ether type : 0x%x\n",ntohs(recv_ether->ether_type));
 			continue;
+		}
 		recv_arp_h = (struct arphdr*)(recv_packet + sizeof(struct etherhdr));
 		
-		if(htons(recv_arp_h->htype) != 1 && htons(recv_arp_h->ptype) != 0x0800 && htons(recv_arp_h->oper) != ARP_REPLY)
+		if(htons(recv_arp_h->htype) != 1 || htons(recv_arp_h->ptype) != 0x0800 || ntohs(recv_arp_h->oper) != ARP_REPLY){
+			printf("[-] this packet is not arp reply packet!\n");
+			printf("hardware type : 0x%x\nARP type : 0x%x // ARP REPLY : 0x%x\n",ntohs(recv_arp_h->htype),ntohs(recv_arp_h->oper),ARP_REPLY);
 			continue;
-	
-		/*
-		memcpy(&recv_IP,recv_arp_h->tpa,sizeof(recv_IP));
-		memcpy(&recv_MAC,recv_arp_h->tha,sizeof(recv_MAC));
-		*/
+		}
 
-		if(memcmp(recv_arp_h->tpa,senderIP,sizeof(senderIP))
-				continue;
-		printf("!@#!@$!@#!@#\n");
-		printf("reply IP : %s\n",inet_ntoa(recv_IP));
-		printf("reply MAC : "); print_mac(recv_arp_h->tha);
-		printf("Done!\n");
+		printf("ARP type : 0x%x // ARP REPLY : 0x%x\n",ntohs(recv_arp_h->oper),ARP_REPLY);
+		if(memcmp(recv_arp_h->spa,senderIP,sizeof(senderIP))){
+			printf("[-] senderIP not match!\n");
+			printf("\t[+] received arp header IP : ");
+			for(int i=0;i<4;i++) printf("%02x", recv_arp_h->spa[i]); printf("\n");
+			printf("\t[+] sender IP : ");
+			printf("%x\n",htonl(senderIP->s_addr));
+			continue;
+		}
+		
+		memcpy(&recv_IP,recv_arp_h->spa,sizeof(recv_IP));
+		printf("\n[+] result\n");
+		printf("\t[-] reply IP : %s\n",inet_ntoa(recv_IP));
+		printf("\t[-] reply MAC : "); print_mac(recv_arp_h->sha);
+		printf("\nDone!\n");
 		
 		break;
 	}
@@ -167,10 +183,10 @@ int main(int argc, char* argv[])
 	dev = argv[1];
 	printf("\n[+] device : %s\n",dev);
 	my_mac = GetSvrMacAddress(dev);
-	print_mac(my_mac);
+	printf("[+] my MAC : "); print_mac(my_mac);
 
 	if(s_get_IPAddress(dev,addr)>0){
-		printf("[+] my IP : %d.%d.%d.%d\n",(int)addr[0],(int)addr[1],(int)addr[2],(int)addr[3]);
+		printf("[+] my IP : %d.%d.%d.%d // hex : ",(int)addr[0],(int)addr[1],(int)addr[2],(int)addr[3]);
 	}
 
 	buf = (char *)malloc(sizeof(addr));
@@ -188,7 +204,7 @@ int main(int argc, char* argv[])
 		exit(1);
 	}
 	//arp_broad(handle,my_mac,&senderIP,&targetIP);
-	arp_braod(handle,my_mac,&myIP,&targetIP);
+	arp_broad(handle,my_mac,&myIP,&senderIP);
 	printf("\n[+] Done!\n");		
 	return 0;
 }
