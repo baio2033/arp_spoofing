@@ -139,7 +139,7 @@ u_char* arp_broad(pcap_t *handle, u_char *mac_addr, struct in_addr *senderIP, st
 //			printf("hardware type : 0x%x\nARP type : 0x%x // ARP REPLY : 0x%x\n",ntohs(recv_arp_h->htype),ntohs(recv_arp_h->oper),ARP_REPLY);
 			continue;
 		}
-		buf = (u_char*)malloc(sizeof(4));
+		buf = (u_char*)malloc(4);
 		sprintf(buf,"%d.%d.%d.%d",recv_arp_h->spa[0],recv_arp_h->spa[1],recv_arp_h->spa[2],recv_arp_h->spa[3]);
 		inet_pton(AF_INET,buf,&recv_IP.s_addr);
 		free(buf);
